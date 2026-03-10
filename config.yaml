@@ -1,0 +1,37 @@
+models:
+  default_classification:
+    - clip_vit_l14
+    - clip_rn50
+    - blip
+    - blip2
+  default_retrieval:
+    - clip_vit_l14
+    - clip_rn50
+    - blip
+    - blip2
+
+classification:
+  celeba:
+    attr_csv: /vol/lian/datasets/celeba/list_attr_celeba.csv
+    split_csv: /vol/lian/datasets/celeba/list_eval_partition.csv
+    img_dir: /vol/lian/datasets/celeba/img_align_celeba
+    batch_size: 128
+  facet:
+    annotation_csv: /vol/lian/Gen_AI/FACET/single_person.csv
+    img_dir: /vol/lian/Gen_AI/FACET/single_person
+    batch_size: 128
+
+retrieval:
+  batch_size_image: 64
+  batch_size_text: 256
+  sim_batch_size: 512
+  max_queries: 0
+  datasets:
+    coco:
+      pairs_csv: /vol/lian/Gen_AI/COCO2017_image_caption_pairs.csv
+      images_root: /vol/lian/Gen_AI/COCO2017_inference
+      output_csv: /vol/lian/Gen_AI/coco_retrieval_metrics.csv
+    flickr:
+      pairs_csv: /vol/lian/Gen_AI/flickr30k/flicker_single.csv
+      images_root: /vol/lian/Gen_AI/flickr30k/single_flicker
+      output_csv: /vol/lian/Gen_AI/flickr30k/flickr_retrieval_metrics.csv
