@@ -9,7 +9,6 @@ TextEncoder = Callable[[list[str]], torch.Tensor]
 
 
 def _as_unit_tensor(embeddings: torch.Tensor) -> torch.Tensor:
-    """Ensure 2D float tensor with unit-length rows."""
     if not isinstance(embeddings, torch.Tensor):
         embeddings = torch.as_tensor(embeddings)
     if embeddings.ndim != 2:
@@ -19,14 +18,6 @@ def _as_unit_tensor(embeddings: torch.Tensor) -> torch.Tensor:
 
 
 def spherical_mean(embeddings: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
-    """
-    Compute spherical mean on a unit sphere.
-
-    Steps:
-    1) Normalize each embedding to unit norm.
-    2) Take arithmetic mean in R^D.
-    3) Re-normalize the mean to unit norm.
-    """
     unit = _as_unit_tensor(embeddings)
     mean_vec = unit.mean(dim=0)
     norm = torch.linalg.norm(mean_vec)
@@ -40,29 +31,6 @@ def build_group_prototypes(
     text_encoder: TextEncoder,
     sensitive_attribute: str,
 ) -> Dict[str, torch.Tensor]:
-    """
-    Build prototype for each group of one sensitive attribute.
-
-    Args:
-        group_prompt_map:
-            Mapping like:
-            {
-              "old male": {
-                "sensitive_attribute": "intersection of age and gender",
-                "t_g": "...",
-                "T_g": ["...", "..."]
-              },
-              "young female": {...}
-            }
-        text_encoder:
-            Callable that receives List[str] and returns embeddings [N, D].
-            Compatible with LoadedModel.encode_text from models.py.
-        sensitive_attribute:
-            The attribute name expected for all groups in this map.
-
-    Returns:
-        Dict[group_name, prototype_tensor] where each prototype is unit-normalized [D].
-    """
     prototypes: Dict[str, torch.Tensor] = {}
 
     for group, entry in group_prompt_map.items():
@@ -96,9 +64,6 @@ def build_class_prompt_group_prototypes(
     text_encoder: TextEncoder,
     sensitive_attribute: str,
 ) -> Dict[str, torch.Tensor]:
-    """
-    Convenience wrapper to build group prototypes for one class prompt from LLM.json.
-    """
     group_prompt_map = llm_classification_map.get(class_prompt)
     if not isinstance(group_prompt_map, Mapping):
         raise KeyError(f"Class prompt not found in LLM map: {class_prompt}")
@@ -114,17 +79,6 @@ def construct_attribute_space(
     reference_group: str | None = None,
     rank_tol: float = 1e-6,
 ) -> torch.Tensor:
-    """
-    Construct attribute-space basis A from group prototypes.
-
-    Given prototypes {group -> p_g}, choose a reference prototype p_r and form
-    difference vectors s_i = p_i - p_r for all i != r. The attribute space is
-    the span of these vectors.
-
-    Returns:
-        A: basis matrix in R^{d x r} whose columns span the attribute space.
-           r <= n-1 and may be 0 for degenerate cases.
-    """
     if len(prototypes) < 2:
         raise ValueError("Need at least two group prototypes to construct attribute space")
 
@@ -148,12 +102,10 @@ def construct_attribute_space(
             raise ValueError(f"Dimension mismatch: '{g}' has {v.shape[0]} but ref has {ref.shape[0]}")
         diffs.append(v - ref)
 
-    # D in R^{d x (n-1)} where columns are difference vectors.
     D = torch.stack(diffs, dim=1)
     if D.numel() == 0:
         return D.new_zeros((ref.shape[0], 0))
 
-    # Build a basis for span(D) using SVD; columns of U[:, :r] span the space.
     U, S, _ = torch.linalg.svd(D, full_matrices=False)
     if S.numel() == 0:
         return D.new_zeros((ref.shape[0], 0))
@@ -171,20 +123,6 @@ def decompose_embedding_by_attribute_space(
     u: torch.Tensor,
     A: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Orthogonally decompose embedding(s) using attribute-space basis A.
-
-    For each embedding u:
-      u_parallel = P_parallel u, with P_parallel = A (A^T A)^(-1) A^T
-      u_orth     = u - u_parallel
-
-    Args:
-        u: tensor of shape [d] or [m, d]
-        A: basis matrix of shape [d, r]
-
-    Returns:
-        (u_parallel, u_orth) with the same shape as u.
-    """
     if not isinstance(u, torch.Tensor):
         u = torch.as_tensor(u)
     if not isinstance(A, torch.Tensor):
@@ -195,7 +133,7 @@ def decompose_embedding_by_attribute_space(
 
     squeeze_back = False
     if u.ndim == 1:
-        u = u.unsqueeze(0)  # [1, d]
+        u = u.unsqueeze(0)
         squeeze_back = True
     if u.ndim != 2:
         raise ValueError(f"u must be [d] or [m, d], got shape={tuple(u.shape)}")
@@ -204,14 +142,13 @@ def decompose_embedding_by_attribute_space(
     if u.shape[1] != A.shape[0]:
         raise ValueError(f"Dimension mismatch: u has d={u.shape[1]}, A has d={A.shape[0]}")
 
-    # Degenerate zero-dimensional attribute space.
     if A.shape[1] == 0:
         u_parallel = torch.zeros_like(u)
         u_orth = u.clone()
     else:
         AtA = A.T @ A
         AtA_inv = torch.linalg.pinv(AtA)
-        P_parallel = A @ AtA_inv @ A.T  # [d, d]
+        P_parallel = A @ AtA_inv @ A.T
         u_parallel = (P_parallel @ u.T).T
         u_orth = u - u_parallel
 
@@ -225,18 +162,6 @@ def compute_optimal_debiased_embedding(
     A: torch.Tensor,
     eps: float = 1e-12,
 ) -> torch.Tensor:
-    """
-    Compute optimal debiased embedding u* from embedding e and attribute space A.
-
-    Let e = e_parallel + e_orth from decomposition relative to A.
-    Then:
-      u* = sqrt(1 - alpha*^2) * e_orth/||e_orth|| + alpha* * e_parallel/||e_parallel||
-    where
-      E = ||e_parallel|| + (1 - ||e_orth||) / ||e_parallel||
-      alpha* = (E - ||e_orth|| * sqrt(E^2 - ||e_parallel||^2)) / (E^2 + ||e_orth||^2)
-
-    Supports e with shape [d] or [m, d]. Returns same shape as e.
-    """
     if not isinstance(e, torch.Tensor):
         e = torch.as_tensor(e)
     e = e.float()
@@ -248,11 +173,10 @@ def compute_optimal_debiased_embedding(
     if e.ndim != 2:
         raise ValueError(f"e must be [d] or [m, d], got shape={tuple(e.shape)}")
 
-    e_parallel, e_orth = decompose_embedding_by_attribute_space(e, A)  # both [m, d]
-    n_parallel = torch.linalg.norm(e_parallel, dim=1)  # [m]
-    n_orth = torch.linalg.norm(e_orth, dim=1)  # [m]
+    e_parallel, e_orth = decompose_embedding_by_attribute_space(e, A)
+    n_parallel = torch.linalg.norm(e_parallel, dim=1)
+    n_orth = torch.linalg.norm(e_orth, dim=1)
 
-    # Avoid division by zero for degenerate cases.
     n_parallel_safe = torch.clamp(n_parallel, min=eps)
     n_orth_safe = torch.clamp(n_orth, min=eps)
 
@@ -267,12 +191,10 @@ def compute_optimal_debiased_embedding(
     orth_coef = torch.sqrt(torch.clamp(1.0 - alpha * alpha, min=0.0))
     u_star = orth_coef.unsqueeze(1) * e_orth_hat + alpha.unsqueeze(1) * e_parallel_hat
 
-    # Edge case requested: if ||e_parallel||=0 or ||e_orth||=0, keep original embedding.
     unchanged_mask = (n_parallel <= eps) | (n_orth <= eps)
     if torch.any(unchanged_mask):
         u_star[unchanged_mask] = e[unchanged_mask]
 
-    # Final normalize to ensure unit-sphere output.
     u_star = torch.nn.functional.normalize(u_star, dim=-1)
     if squeeze_back:
         return u_star[0]

@@ -21,7 +21,6 @@ MODEL_CONFIGS: Dict[str, Dict[str, str]] = {
     "openclip_vit_h14_sd21": {"family": "open_clip", "model_name": "ViT-H-14", "pretrained": "laion2b_s32b_b79k"},
     "clip_rn50": {"family": "open_clip", "model_name": "RN50", "pretrained": "openai"},
     "blip": {"family": "blip_retrieval", "hf_id": "Salesforce/blip-itm-base-coco"},
-    # BLIP-2 is heavy; this default may require substantial VRAM/RAM.
     "blip2": {"family": "blip2_retrieval", "hf_id": "Salesforce/blip2-itm-vit-g-coco"},
 }
 

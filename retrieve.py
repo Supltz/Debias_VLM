@@ -30,8 +30,10 @@ from models import load_model
 
 
 DEFAULT_CONFIG_PATH = "/vol/lian/Gen_AI/config.yaml"
-DEFAULT_LLM_JSON_PATH = "/vol/lian/Gen_AI/LLM.json"
-DEFAULT_COCO_GROUP_CSV = "/vol/lian/Gen_AI/COCO2017.csv"
+DEFAULT_RETRIEVAL_MODELS = ["clip_vit_l14", "clip_rn50", "blip"]
+DEFAULT_RETRIEVAL_BATCH_SIZE_IMAGE = 64
+DEFAULT_RETRIEVAL_BATCH_SIZE_TEXT = 256
+DEFAULT_RETRIEVAL_SIM_BATCH_SIZE = 512
 MAXSKEW_M = 1000
 RETRIEVAL_SENSITIVE_ATTRIBUTE = {
     "coco": "intersection of perceived gender and skin tone",
@@ -71,7 +73,7 @@ def load_config(config_path: Path) -> dict:
         raise FileNotFoundError(f"Config file not found: {config_path}")
     with config_path.open("r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
-    required = ["models", "retrieval"]
+    required = ["paths", "retrieval"]
     for key in required:
         if key not in cfg:
             raise ValueError(f"Missing key '{key}' in config: {config_path}")
@@ -79,34 +81,18 @@ def load_config(config_path: Path) -> dict:
 
 
 def parse_args() -> argparse.Namespace:
-    pre_parser = argparse.ArgumentParser(add_help=False)
-    pre_parser.add_argument("--config", type=str, default=DEFAULT_CONFIG_PATH)
-    pre_parser.add_argument("--dataset", type=str, default="coco")
-    boot_args, _ = pre_parser.parse_known_args()
-
-    cfg = load_config(Path(boot_args.config))
+    cfg = load_config(Path(DEFAULT_CONFIG_PATH))
     retrieval_cfg = cfg["retrieval"]
     dataset_keys = sorted(retrieval_cfg["datasets"].keys())
-    if boot_args.dataset not in retrieval_cfg["datasets"]:
-        raise ValueError(f"Unknown dataset '{boot_args.dataset}'. Available: {dataset_keys}")
-
-    ds_cfg = retrieval_cfg["datasets"][boot_args.dataset]
-    default_models = cfg["models"]["default_retrieval"]
+    default_dataset = "coco"
+    if default_dataset not in retrieval_cfg["datasets"]:
+        raise ValueError(f"Unknown dataset '{default_dataset}'. Available: {dataset_keys}")
 
     parser = argparse.ArgumentParser(description="Text-to-image retrieval evaluation (R@5, R@10, MS@1000)")
-    parser.add_argument("--config", type=str, default=DEFAULT_CONFIG_PATH)
-    parser.add_argument("--dataset", type=str, default=boot_args.dataset, choices=dataset_keys)
-    parser.add_argument("--pairs_csv", type=str, default=ds_cfg["pairs_csv"])
-    parser.add_argument("--images_root", type=str, default=ds_cfg["images_root"])
-    parser.add_argument("--group_csv", type=str, default=ds_cfg.get("group_csv", ""))
-    parser.add_argument("--models", nargs="+", default=default_models)
-    parser.add_argument("--batch_size_image", type=int, default=int(retrieval_cfg["batch_size_image"]))
-    parser.add_argument("--batch_size_text", type=int, default=int(retrieval_cfg["batch_size_text"]))
-    parser.add_argument("--sim_batch_size", type=int, default=int(retrieval_cfg["sim_batch_size"]))
+    parser.add_argument("--dataset", type=str, default=default_dataset, choices=dataset_keys)
+    parser.add_argument("--models", nargs="+", default=DEFAULT_RETRIEVAL_MODELS)
     parser.add_argument("--device", type=str, default=None)
-    parser.add_argument("--max_queries", type=int, default=int(retrieval_cfg.get("max_queries", 0)))
-    parser.add_argument("--llm_json", type=str, default=DEFAULT_LLM_JSON_PATH)
-    parser.add_argument("--apply_debiasing", action="store_true", help="Apply debiasing to text and image embeddings")
+    parser.add_argument("--apply_debiasing", action="store_true")
     return parser.parse_args()
 
 
@@ -210,7 +196,7 @@ def load_pairs_auto(
     coco_group_lookup: Dict[object, str] = {}
     if dataset == "coco":
         if group_csv is None:
-            group_csv = Path(DEFAULT_COCO_GROUP_CSV)
+            raise ValueError("group_csv must be provided for the COCO retrieval dataset.")
         coco_group_lookup = load_coco_group_lookup(group_csv)
 
     image_key_to_index: Dict[object, int] = {}
@@ -473,22 +459,19 @@ def run_model_eval(
     gt_indices: Sequence[int],
     llm_retrieval_group_map: Dict[str, Dict[str, Dict[str, object]]],
     args: argparse.Namespace,
+    batch_size_image: int,
+    batch_size_text: int,
+    sim_batch_size: int,
 ):
     print(f"\n=== Evaluating {model_name} ===")
     model = load_model(model_name, device=args.device)
     print(f"Loaded {model.name} ({model.model_id}) on {model.device}")
 
-    image_embs = embed_images(model, image_paths, args.batch_size_image)
+    image_embs = embed_images(model, image_paths, batch_size_image)
+    eval_captions = captions
+    eval_gt = gt_indices
 
-    if args.max_queries and args.max_queries > 0:
-        eval_captions = captions[: args.max_queries]
-        eval_gt = gt_indices[: args.max_queries]
-        print(f"Using first {len(eval_captions)} captions due to --max_queries")
-    else:
-        eval_captions = captions
-        eval_gt = gt_indices
-
-    text_embs = embed_texts(model, eval_captions, args.batch_size_text)
+    text_embs = embed_texts(model, eval_captions, batch_size_text)
     image_embs, text_embs = align_embedding_dims(image_embs, text_embs)
     if args.apply_debiasing:
         sensitive_attribute = RETRIEVAL_SENSITIVE_ATTRIBUTE[args.dataset]
@@ -542,7 +525,7 @@ def run_model_eval(
             image_groups=image_groups,
             ks=(5, 10),
             maxskew_ms=(MAXSKEW_M,),
-            sim_batch_size=args.sim_batch_size,
+            sim_batch_size=sim_batch_size,
         )
     else:
         recalls, maxskews = compute_recall_and_maxskew(
@@ -552,7 +535,7 @@ def run_model_eval(
             image_groups=image_groups,
             ks=(5, 10),
             maxskew_ms=(MAXSKEW_M,),
-            sim_batch_size=args.sim_batch_size,
+            sim_batch_size=sim_batch_size,
         )
 
     print(
@@ -569,22 +552,28 @@ def run_model_eval(
 
 def main():
     args = parse_args()
+    cfg = load_config(Path(DEFAULT_CONFIG_PATH))
+    shared_paths_cfg = cfg["paths"]
+    ds_cfg = cfg["retrieval"]["datasets"][args.dataset]
+    batch_size_image = DEFAULT_RETRIEVAL_BATCH_SIZE_IMAGE
+    batch_size_text = DEFAULT_RETRIEVAL_BATCH_SIZE_TEXT
+    sim_batch_size = DEFAULT_RETRIEVAL_SIM_BATCH_SIZE
 
-    pairs_csv = Path(args.pairs_csv)
-    images_root = Path(args.images_root)
+    pairs_csv = Path(ds_cfg["pairs_csv"])
+    images_root = Path(ds_cfg["images_root"])
     if not pairs_csv.is_file():
         raise FileNotFoundError(f"Pairs CSV not found: {pairs_csv}")
     if not images_root.is_dir():
         raise FileNotFoundError(f"Images root not found: {images_root}")
 
-    group_csv = Path(args.group_csv) if args.group_csv else None
+    group_csv = Path(ds_cfg["group_csv"]) if ds_cfg.get("group_csv") else None
     image_paths, image_groups, captions, raw_captions, query_image_ids, gt_indices = load_pairs_auto(
         pairs_csv=pairs_csv,
         images_root=images_root,
         dataset=args.dataset,
         group_csv=group_csv,
     )
-    llm_retrieval_group_map = load_llm_retrieval_group_map(Path(args.llm_json), args.dataset)
+    llm_retrieval_group_map = load_llm_retrieval_group_map(Path(shared_paths_cfg["llm_json"]), args.dataset)
     print(f"Loaded LLM retrieval prompt entries: {len(llm_retrieval_group_map)}")
     validate_llm_retrieval_coverage(
         dataset=args.dataset,
@@ -604,6 +593,9 @@ def main():
             gt_indices=gt_indices,
             llm_retrieval_group_map=llm_retrieval_group_map,
             args=args,
+            batch_size_image=batch_size_image,
+            batch_size_text=batch_size_text,
+            sim_batch_size=sim_batch_size,
         )
         metrics_rows.append(
             {

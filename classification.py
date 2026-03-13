@@ -29,7 +29,8 @@ from debiasing import (
 from models import load_model
 
 DEFAULT_CONFIG_PATH = "/vol/lian/Gen_AI/config.yaml"
-DEFAULT_LLM_JSON_PATH = "/vol/lian/Gen_AI/LLM.json"
+DEFAULT_CLASSIFICATION_MODELS = ["clip_vit_l14", "clip_rn50", "blip"]
+DEFAULT_CLASSIFICATION_BATCH_SIZE = 128
 EVAL_PARTITIONS = {1, 2}
 CELEBA_GROUP_ORDER = ["Male-Old", "Female-Old", "Male-Young", "Female-Young"]
 FACET_GROUP_ORDER = ["Male", "Female"]
@@ -69,7 +70,7 @@ def load_config(config_path: Path) -> dict:
         raise FileNotFoundError(f"Config file not found: {config_path}")
     with config_path.open("r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
-    for key in ("models", "classification"):
+    for key in ("paths", "classification"):
         if key not in cfg:
             raise ValueError(f"Missing key '{key}' in config: {config_path}")
     return cfg
@@ -85,12 +86,15 @@ def parse_args() -> argparse.Namespace:
     ds_keys = sorted(cfg["classification"].keys())
     if boot_args.dataset not in cfg["classification"]:
         raise ValueError(f"Unknown dataset '{boot_args.dataset}'. Available: {ds_keys}")
+    shared_paths_cfg = cfg["paths"]
 
     p = argparse.ArgumentParser(description="Zero-shot classification with fairness metrics")
     p.add_argument("--config", type=str, default=DEFAULT_CONFIG_PATH)
     p.add_argument("--dataset", type=str, default=boot_args.dataset, choices=ds_keys)
+    p.add_argument("--models", nargs="+", default=DEFAULT_CLASSIFICATION_MODELS)
+    p.add_argument("--batch_size", type=int, default=DEFAULT_CLASSIFICATION_BATCH_SIZE)
     p.add_argument("--device", type=str, default=None)
-    p.add_argument("--llm_json", type=str, default=DEFAULT_LLM_JSON_PATH)
+    p.add_argument("--llm_json", type=str, default=shared_paths_cfg["llm_json"])
     p.add_argument("--apply_debiasing", action="store_true", help="Apply debiasing to text and image embeddings")
     return p.parse_args()
 
@@ -424,8 +428,8 @@ def main() -> None:
     args = parse_args()
     cfg = load_config(Path(args.config))
     ds_cfg = cfg["classification"][args.dataset]
-    model_names = cfg["models"]["default_classification"]
-    batch_size = int(ds_cfg["batch_size"])
+    model_names = args.models
+    batch_size = args.batch_size
     image_dir = Path(ds_cfg["img_dir"])
 
     if not image_dir.is_dir():

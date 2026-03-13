@@ -1,37 +1,32 @@
-models:
-  default_classification:
-    - clip_vit_l14
-    - clip_rn50
-    - blip
-    - blip2
-  default_retrieval:
-    - clip_vit_l14
-    - clip_rn50
-    - blip
-    - blip2
+paths:
+  # LLM-generated prompts (JSON).
+  llm_json: /vol/lian/Gen_AI/LLM.json
 
 classification:
   celeba:
+    # CelebA attribute annotation CSV.
     attr_csv: /vol/lian/datasets/celeba/list_attr_celeba.csv
+    # CelebA evaluation partition CSV.
     split_csv: /vol/lian/datasets/celeba/list_eval_partition.csv
+    # Directory containing CelebA image files.
     img_dir: /vol/lian/datasets/celeba/img_align_celeba
-    batch_size: 128
   facet:
+    # FACET single-person annotation CSV.
     annotation_csv: /vol/lian/Gen_AI/FACET/single_person.csv
+    # Directory containing FACET single-person image files.
     img_dir: /vol/lian/Gen_AI/FACET/single_person
-    batch_size: 128
 
 retrieval:
-  batch_size_image: 64
-  batch_size_text: 256
-  sim_batch_size: 512
-  max_queries: 0
   datasets:
     coco:
+      # COCO image-caption pairs CSV used as retrieval queries and ground truth.
       pairs_csv: /vol/lian/Gen_AI/COCO2017_image_caption_pairs.csv
+      # Root directory containing COCO images.
       images_root: /vol/lian/Gen_AI/COCO2017_inference
-      output_csv: /vol/lian/Gen_AI/coco_retrieval_metrics.csv
+      # COCO sensitive-group annotation CSV used for fairness grouping.
+      group_csv: /vol/lian/Gen_AI/COCO2017.csv
     flickr:
+      # Flickr30k image-caption pairs CSV used as retrieval queries and ground truth.
       pairs_csv: /vol/lian/Gen_AI/flickr30k/flicker_single.csv
+      # Directory containing Flickr30k images used for retrieval.
       images_root: /vol/lian/Gen_AI/flickr30k/single_flicker
-      output_csv: /vol/lian/Gen_AI/flickr30k/flickr_retrieval_metrics.csv
