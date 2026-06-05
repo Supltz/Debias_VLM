@@ -1,6 +1,6 @@
 <div align="center">
 
-# A Closed-Form Solution for Debiasing Vision-Language Models<br>with Utility Guarantees Across Modalities and Tasks
+## A Closed-Form Solution for Debiasing Vision-Language Models<br>with Utility Guarantees Across Modalities and Tasks
 
 **CVPR 2026 | Tangzheng Lian, Guanyu Hu, Yijing Ren, Dimitrios Kollias, Oya Celiktutan**
 
